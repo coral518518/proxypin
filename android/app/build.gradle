@@ -80,17 +80,26 @@ android {
         }
     }
 
+    def hasReleaseKey = keystoreProperties['storeFile'] != null && file(keystoreProperties['storeFile']).exists()
+
     buildTypes {
         release {
-            // Signing with the debug keys for now if release key is absent, so release APK is properly signed.
-            signingConfig (keystoreProperties['storeFile'] != null && file(keystoreProperties['storeFile']).exists()) ? signingConfigs.release : signingConfigs.debug
+            if (hasReleaseKey) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
 
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         debug {
-            signingConfig (keystoreProperties['storeFile'] != null && file(keystoreProperties['storeFile']).exists()) ? signingConfigs.release : signingConfigs.debug
+            if (hasReleaseKey) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
