@@ -385,8 +385,19 @@ class ProxyVpnService : VpnService(), ProtectSocket {
             .setMtu(MAX_PACKET_LEN)
             .addAddress(VIRTUAL_HOST, 32)
             .addRoute("0.0.0.0", 0)
+            .addDnsServer("198.18.0.1") // Virtual DNS
+            .addDnsServer("8.8.8.8")
             .setSession(baseContext.applicationInfo.name)
             .setBlocking(true)
+
+        // IPv6 支持：防止双栈网络下因缺 IPv6 路由造成特定 App 断网或绕过
+        try {
+            build.addAddress("fd00::1", 128)
+            build.addRoute("::", 0)
+            build.addDnsServer("2001:4860:4860::8888")
+        } catch (e: Exception) {
+            Log.w("ProxyVpnService", "Failed to add IPv6 routes", e)
+        }
 
         // 处理 proxyPassDomains 中的 CIDR 格式，添加到 excludeRoute
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && proxyPassDomains != null) {

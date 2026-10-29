@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:proxypin/network/channel/channel.dart';
 import 'package:proxypin/network/channel/channel_context.dart';
+import 'package:proxypin/network/channel/host_port.dart';
 import 'package:proxypin/network/http/codec.dart';
 import 'package:proxypin/network/util/attribute_keys.dart';
 import 'package:proxypin/network/util/logger.dart';
@@ -120,6 +121,7 @@ class SocksServerHandler extends ChannelHandler<Uint8List> {
 
       logger.d('[${channel.id}] Socks5 connect ${proxyInfo.host}:${proxyInfo.port}');
       channelContext.putAttribute(AttributeKeys.socks5Proxy, proxyInfo);
+      channelContext.host = HostAndPort.host(host, port);
 
       final out = encodeCommandResponse(Socks5.repSuccess, bndAddrType: Socks5.repSocks5ServerAtypIpv4);
       await channel.writeBytes(out);

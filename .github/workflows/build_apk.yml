@@ -50,10 +50,12 @@ jobs:
           tag_name: latest
           name: "ProxyPin 最新构建 (Android APK)"
           body: |
-            ### ProxyPin 最新构建
-            - 修复 Android 13 上特定 App 抓包报 SSL Alert 46 / SSL handshake failed 问题
-            - 优化动态证书扩展字段（EKU / KeyUsage / BasicConstraints）与服务端证书探测
-            - 直接下载下方的 `.apk` 即可安装
+            ### ProxyPin 重构版 (Reqable 同款底层内核)
+            - 重构 Android 端 VPN 抓包底层：引入 Rust 原生 tun2proxy 虚拟网卡代理引擎，彻底解决断网与卡顿问题
+            - 集成 Virtual DNS (Fake-IP 机制，198.18.0.0/15)，消除 DNS 延迟、超时与污染
+            - 新增全局 IPv6 双栈捕获支持，防止双栈网络下因缺 IPv6 路由导致特定 App (如微信/B站/TikTok) 发生泄漏或断网
+            - 完整保留所有高级功能：请求重写 (Rewrite)、映射 (Map)、脚本 (Script)、屏蔽 (Block)、断点 (Breakpoint) 与工具箱
+            - 直接下载下方的 `.apk` 即可安装使用
           draft: false
           prerelease: false
           files: build/app/outputs/flutter-apk/*.apk
