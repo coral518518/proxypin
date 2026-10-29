@@ -62,6 +62,9 @@ class CertificateManager {
   /// ca证书 subject DN 的原始 ASN.1 字节, 用作签发叶子证书的 issuer, 保证与 CA 二进制精确匹配
   static Uint8List? _caSubjectDnBytes;
 
+  /// ca证书 PEM 原始字符串, 用于同叶子证书组合成完整证书链发送给客户端
+  static String? _caCertPem;
+
   /// 是否初始化
   static StartState _state = StartState.uninitialized;
   static Completer<void> _initializationCompleter = Completer<void>();
@@ -130,8 +133,10 @@ class CertificateManager {
     String cer = generate(_caCert!, _serverKeyPair.publicKey as RSAPublicKey, _caPriKey, host, remoteCert: remoteCert);
     var rsaPrivateKey = _serverKeyPair.privateKey as RSAPrivateKey;
 
+    var fullChain = _caCertPem != null ? '$cer\n$_caCertPem' : cer;
+
     var securityContext = SecurityContext(withTrustedRoots: true)
-      ..useCertificateChainBytes(cer.codeUnits)
+      ..useCertificateChainBytes(fullChain.codeUnits)
       ..allowLegacyUnsafeRenegotiation = true
       ..usePrivateKeyBytes(CryptoUtils.encodeRSAPrivateKeyToPemPkcs1(rsaPrivateKey).codeUnits);
 
@@ -168,18 +173,47 @@ class CertificateManager {
     //存在远程真实证书时, 复制其 Subject、SAN、有效期, 以通过客户端严格校验
     if (remoteCert != null) {
       x509Subject = _remoteSubject(remoteCert) ?? x509Subject;
-      sans = _remoteSans(remoteCert) ?? sans;
+      if (x509Subject['CN'] == null && x509Subject['2.5.4.3'] == null) {
+        x509Subject['CN'] = host;
+      }
+      var rSans = _remoteSans(remoteCert);
+      if (rSans != null && rSans.isNotEmpty) {
+        sans = [host, ...rSans].toSet().toList();
+      }
       notBefore = remoteCert.validity.notBefore;
       notAfter = remoteCert.validity.notAfter;
     }
 
-    return X509Utils.generateSelfSignedCertificate(caRoot, serverPubKey, caPriKey, 36,
+    // 处理时间边界，防止时钟偏差或过期导致握手失败
+    DateTime now = DateTime.now();
+    DateTime effectiveNotBefore = notBefore != null && notBefore.isBefore(now)
+        ? notBefore.subtract(const Duration(days: 1))
+        : now.subtract(const Duration(days: 1));
+    if (effectiveNotBefore.year < 1970) {
+      effectiveNotBefore = now.subtract(const Duration(days: 1));
+    }
+
+    DateTime effectiveNotAfter = notAfter ?? now.add(const Duration(days: 365));
+    if (effectiveNotAfter.isBefore(now)) {
+      effectiveNotAfter = now.add(const Duration(days: 365));
+    }
+    // UTCTime 仅支持 1950-2049 年，超过 2049 强制截断至 2049-12-31 避免年份回绕成 19xx
+    if (effectiveNotAfter.year >= 2050) {
+      effectiveNotAfter = DateTime.utc(2049, 12, 31, 23, 59, 59);
+    }
+
+    var serial = '${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(10000)}';
+
+    return X509Utils.generateSelfSignedCertificate(caRoot, serverPubKey, caPriKey, 365,
         sans: sans,
-        serialNumber: Random().nextInt(1000000).toString(),
+        serialNumber: serial,
         subject: x509Subject,
         issuerRawBytes: _caSubjectDnBytes,
-        notBefore: notBefore,
-        notAfter: notAfter);
+        notBefore: effectiveNotBefore,
+        notAfter: effectiveNotAfter,
+        keyUsage: ExtensionKeyUsage(ExtensionKeyUsage.digitalSignature | ExtensionKeyUsage.keyEncipherment),
+        extKeyUsage: [ExtendedKeyUsage.SERVER_AUTH],
+        basicConstraints: BasicConstraints(isCA: false, critical: false));
   }
 
   /// 提取远程证书的 subject (key 为 OID 字符串, 如 2.5.4.3=CN), 整体替换默认模板避免 CN 重复; 为空返回 null
@@ -283,6 +317,7 @@ class CertificateManager {
       //从项目目录加入ca根证书
       var caPemFile = await certificateFile();
       var caPem = await caPemFile.readAsString();
+      _caCertPem = caPem;
       _caCert = X509Utils.x509CertificateFromPem(caPem);
       //提取 CA subject DN 原始字节, 供签发叶子证书时作为 issuer, 保证与 CA 二进制精确匹配(兼容 iOS 严格校验)
       _caSubjectDnBytes = X509Utils.subjectDnBytesFromPem(caPem);

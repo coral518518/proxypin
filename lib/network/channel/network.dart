@@ -242,6 +242,11 @@ class Server extends Network {
         await remoteChannel.startSecureSocket(channelContext, host: serviceName, supportedProtocols: supportProtocols);
       }
 
+      // 握手前若上游真实证书已就绪，直接基于其属性预生成/刷新叶子证书，避免客户端首次握手因证书不匹配报错
+      if (remoteChannel?.peerCertificate != null && serviceName != null) {
+        await CertificateManager.generateByRemoteCert(serviceName, remoteChannel!.peerCertificate);
+      }
+
       //ssl自签证书
       var certificate = await CertificateManager.getCertificateContext(serviceName!);
       var selectedProtocol = remoteChannel?.selectedProtocol;
