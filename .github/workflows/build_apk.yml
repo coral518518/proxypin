@@ -25,6 +25,11 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Setup zstd source fallback
+        run: |
+          git clone --depth 1 --branch v1.5.6 https://github.com/facebook/zstd.git /tmp/zstd
+          echo "ZSTD_ROOT=/tmp/zstd" >> $GITHUB_ENV
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -35,4 +40,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: proxypin-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/*.apk

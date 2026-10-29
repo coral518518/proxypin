@@ -82,15 +82,15 @@ android {
 
     buildTypes {
         release {
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.release
+            // Signing with the debug keys for now if release key is absent, so release APK is properly signed.
+            signingConfig (keystoreProperties['storeFile'] != null && file(keystoreProperties['storeFile']).exists()) ? signingConfigs.release : signingConfigs.debug
 
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         debug {
-            signingConfig signingConfigs.release
+            signingConfig (keystoreProperties['storeFile'] != null && file(keystoreProperties['storeFile']).exists()) ? signingConfigs.release : signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

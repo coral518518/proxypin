@@ -35,7 +35,7 @@ dependencies:
   url_launcher: ^6.3.3
   toastification: ^3.0.2
   get: ^4.7.3
-  zstandard: ^1.5.0
+  zstandard: 1.4.4
   qr_flutter: ^4.1.0
   flutter_qr_reader_plus: ^1.0.6
   brotli: ^0.6.0
@@ -54,6 +54,10 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: '>=4.0.0 <7.0.0'
+
+dependency_overrides:
+  zstandard: 1.4.4
+  zstandard_android: 1.4.4
 
 # The following section is specific to Flutter packages.
 flutter:
