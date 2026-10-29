@@ -218,9 +218,10 @@ class ProxyVpnService : VpnService(), ProtectSocket {
 
         ProtectSocketHolder.setProtectSocket(this)
         showServiceNotification()
+        val targetProxyHost = if (localProxy) "127.0.0.1" else proxyHost
         vpnThread = ProxyVpnThread(
             vpnInterface!!,
-            proxyHost,
+            targetProxyHost,
             proxyPort,
             proxyPassDomains
         )

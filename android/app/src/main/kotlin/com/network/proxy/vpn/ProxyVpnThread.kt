@@ -84,6 +84,10 @@ class ProxyVpnThread(
             }
             running = false
             interrupt()
+            try {
+                join(1500)
+            } catch (_: InterruptedException) {
+            }
         }
     }
 }
