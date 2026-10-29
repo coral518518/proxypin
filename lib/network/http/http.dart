@@ -501,6 +501,9 @@ class HttpStatus {
   /// 200 OK
   static final HttpStatus ok = newStatus(200, "OK");
 
+  /// 204 No Content
+  static final HttpStatus noContent = newStatus(204, "No Content");
+
   /// 400 Bad Request
   static final HttpStatus badRequest = newStatus(400, "Bad Request");
 
@@ -537,6 +540,8 @@ class HttpStatus {
     switch (code) {
       case 200:
         return ok;
+      case 204:
+        return noContent;
       case 400:
         return badRequest;
       case 401:

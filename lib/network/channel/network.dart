@@ -258,9 +258,12 @@ class Server extends Network {
               }
             }
 
-            final ChannelHandler proxyHandler = (httpHandler is HttpProxyChannelHandler)
-                ? HttpResponseProxyHandler(channel, interceptors, listener: listener)
-                : RelayHandler(channel);
+            final ChannelHandler proxyHandler;
+            if (httpHandler is HttpProxyChannelHandler) {
+              proxyHandler = HttpResponseProxyHandler(channel, interceptors, listener: listener);
+            } else {
+              proxyHandler = RelayHandler(channel);
+            }
 
             remoteChannel = await channelContext.connectServerChannel(remoteAddress, proxyHandler);
           }
