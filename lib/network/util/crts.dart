@@ -133,10 +133,8 @@ class CertificateManager {
     String cer = generate(_caCert!, _serverKeyPair.publicKey as RSAPublicKey, _caPriKey, host, remoteCert: remoteCert);
     var rsaPrivateKey = _serverKeyPair.privateKey as RSAPrivateKey;
 
-    var fullChain = _caCertPem != null ? '$cer\n$_caCertPem' : cer;
-
     var securityContext = SecurityContext(withTrustedRoots: true)
-      ..useCertificateChainBytes(fullChain.codeUnits)
+      ..useCertificateChainBytes(cer.codeUnits)
       ..allowLegacyUnsafeRenegotiation = true
       ..usePrivateKeyBytes(CryptoUtils.encodeRSAPrivateKeyToPemPkcs1(rsaPrivateKey).codeUnits);
 
@@ -211,7 +209,6 @@ class CertificateManager {
         issuerRawBytes: _caSubjectDnBytes,
         notBefore: effectiveNotBefore,
         notAfter: effectiveNotAfter,
-        keyUsage: ExtensionKeyUsage(ExtensionKeyUsage.digitalSignature | ExtensionKeyUsage.keyEncipherment),
         extKeyUsage: [ExtendedKeyUsage.SERVER_AUTH],
         basicConstraints: BasicConstraints(isCA: false, critical: false));
   }
