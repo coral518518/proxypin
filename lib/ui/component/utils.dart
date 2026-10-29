@@ -1,0 +1,451 @@
+/*
+ * Copyright 2023 Hongen Wang All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import 'dart:io';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:proxypin/l10n/app_localizations.dart';
+import 'package:flutter_toastr/flutter_toastr.dart';
+import 'package:proxypin/network/http/content_type.dart';
+import 'package:proxypin/network/http/http.dart';
+import 'package:proxypin/network/util/logger.dart';
+
+import '../../utils/lang.dart';
+import '../../utils/platform.dart';
+import '../toolbox/encoder.dart';
+import 'multi_window.dart';
+
+const contentMap = {
+  ContentType.json: Icons.data_object,
+  ContentType.html: Icons.html,
+  ContentType.xml: Icons.code,
+  ContentType.js: Icons.javascript,
+  ContentType.image: Icons.image,
+  ContentType.video: Icons.video_call,
+  ContentType.text: Icons.text_fields,
+  ContentType.css: Icons.css,
+  ContentType.font: Icons.font_download,
+  ContentType.sse: Icons.stream,
+};
+
+/// 暗黑设计稿 docs/design/homepage-dark.html 令牌（浅色令牌在 main.dart 注入主题）
+abstract final class DarkPalette {
+  static const primary = Color(0xFF5D7CFA); // --primary（深底提亮版主色）
+  static const bg = Color(0xFF1B1D22); // --bg 窗口/外框底
+  static const panel = Color(0xFF24262C); // --panel 面板底
+  static const border = Color(0xFF36393F); // --border 结构/卡片描边
+  static const divider = Color(0xFF2D3036); // --divider 卡片内行分隔
+  static const hover = Color(0xFF31343B); // --hover 小控件 hover
+  static const hoverWeak = Color(0xFF2A2D33); // --hover-weak 行 hover
+  static const subtle = Color(0xFF202228); // --subtle 域名组头底
+  static const countBg = Color(0xFF3A3D44); // --cnt-bg 计数胶囊底
+  static const text1 = Color(0xFFE6E8EC); // --text-1
+  static const text2 = Color(0xFFA7ACB4); // --text-2
+  static const text3 = Color(0xFF6F747D); // --text-3
+  static const ok = Color(0xFF3FB96A); // --ok / --get
+  static const warn = Color(0xFFE8A33D); // --warn / --post
+  static const put = Color(0xFF4C9BE8); // --put
+  static const err = Color(0xFFE35B48); // --err / --delete
+  static const ws = Color(0xFF9B72E0); // --ws
+}
+
+/// 结构描边色（工具栏底边 / 导航栏右边 / 状态栏顶边 / 分栏分隔条 / 工具栏小分隔线）。
+/// 深浅色的 dividerColor 都已在 main.dart 注入设计稿 --border 值，直接取用
+Color chromeBorderColor(ThemeData theme) => theme.dividerColor;
+
+/// 主色软底（设计稿 --primary-soft）：浅色主题主色低透明度，暗黑 16%
+Color primarySoftBg(ThemeData theme, {double lightAlpha = 0.08}) =>
+    theme.colorScheme.primary.withValues(alpha: theme.brightness == Brightness.light ? lightAlpha : 0.16);
+
+/// 启用/成功绿（设计稿 --ok）：浅色 #1F8B4C，暗黑 #3FB96A
+Color okColor(ThemeData theme) =>
+    theme.brightness == Brightness.light ? const Color(0xFF1F8B4C) : DarkPalette.ok;
+
+/// 弱网徽章（设计稿 .badge）：浅色黄底深字，暗黑 16% 黄底 + --warn 字
+Color warnBadgeBg(ThemeData theme) => theme.brightness == Brightness.light
+    ? const Color(0xFFFFF3E8)
+    : DarkPalette.warn.withValues(alpha: 0.16);
+
+Color warnBadgeText(ThemeData theme) =>
+    theme.brightness == Brightness.light ? const Color(0xFFB76E00) : DarkPalette.warn;
+
+/// GraphQL 操作类型对应的高亮颜色
+/// mutation/subscription 会修改或订阅数据，用更醒目的橙红；query 用柔和的紫红
+Color graphqlOperationColor(String? operationType) {
+  switch (operationType) {
+    case 'mutation':
+      return const Color(0xFFD9822B); // 橙色：提交/修改数据
+    case 'subscription':
+      return const Color(0xFF2E9E83); // 青绿：订阅
+    case 'query':
+    default:
+      return const Color(0xFFB0578D); // 柔和紫红：读取数据
+  }
+}
+
+/// 生成 GraphQL operationName 的高亮 TextSpan，形如 `  (GetCountries)`
+/// 与前面的路径之间预留两个空格拉开间距，[fixAutoLines] 控制是否插入 0 宽字符防换行
+TextSpan? graphqlOperationSpan(HttpRequest request, {double? fontSize, bool fixAutoLines = false}) {
+  var operationName = request.graphqlOperationName;
+  if (operationName == null) {
+    return null;
+  }
+  var text = '  ($operationName)';
+  return TextSpan(
+    text: fixAutoLines ? text.fixAutoLines() : text,
+    style: TextStyle(
+      fontSize: fontSize,
+      color: graphqlOperationColor(request.graphqlOperationType),
+      fontWeight: FontWeight.w500,
+    ),
+  );
+}
+
+Widget getIcon(HttpResponse? response, {Color? color}) {
+  if (response == null) {
+    return SizedBox(width: 18, child: Icon(Icons.question_mark, size: 16, color: color ?? Colors.green));
+  }
+  if (response.status.code < 0) {
+    return SizedBox(width: 18, child: Icon(Icons.error, size: 16, color: color ?? Colors.red));
+  }
+
+  var contentType = response.contentType;
+  if (contentType.isImage && response.body != null) {
+    // 已是 Uint8List 就直接复用：避免每次 build 拷贝整份图片字节，
+    // 且 MemoryImage 以字节对象身份做缓存键，同一实例才能命中 ImageCache 免于重复解码
+    var body = response.body!;
+    return Image.memory(
+      body is Uint8List ? body : Uint8List.fromList(body),
+      width: Platforms.isDesktop() ? 19 : 26,
+      errorBuilder: (context, error, stackTrace) => Icon(Icons.image, size: 16, color: color ?? Colors.green),
+    );
+  }
+
+  return SizedBox(
+      width: 18, child: Icon(contentMap[contentType] ?? Icons.http, size: 16, color: color ?? Colors.green));
+}
+
+//展示报文大小
+String getPackagesSize(HttpRequest request, HttpResponse? response) {
+  var package = getPackage(request.packageSize);
+  var responsePackage = getPackage(response?.packageSize);
+  if (responsePackage.isEmpty) {
+    return package;
+  }
+  return "$package / $responsePackage ";
+}
+
+String getPackage(int? size) {
+  if (size == null) {
+    return "";
+  }
+  if (size < 1025) {
+    return "$size B";
+  }
+
+  if (size > 1024 * 1024) {
+    return "${(size / 1024 / 1024).toStringAsFixed(2)} M";
+  }
+  return "${(size / 1024).toStringAsFixed(2)} K";
+}
+
+String copyRawRequest(HttpRequest request) {
+  var sb = StringBuffer();
+  var uri = request.requestUri!;
+  var pathAndQuery = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
+
+  sb.writeln("${request.method.name} $pathAndQuery ${request.protocolVersion}");
+  sb.write(request.headers.headerLines());
+  if (request.bodyAsString.isNotEmpty) {
+    sb.writeln();
+    sb.write(request.bodyAsString);
+  }
+  return sb.toString();
+}
+
+String copyRequest(HttpRequest request, HttpResponse? response) {
+  response ??= request.response;
+  var sb = StringBuffer();
+  sb.writeln("Request");
+  sb.writeln("${request.method.name} ${request.requestUrl} ${request.protocolVersion}");
+  sb.writeln(request.headers.headerLines());
+  sb.writeln();
+  sb.writeln(request.bodyAsString);
+
+  sb.writeln();
+  sb.writeln("--------------------------------------------------------");
+  sb.writeln();
+  sb.writeln("Response");
+  sb.writeln("${response?.protocolVersion} ${response?.status.code}");
+  sb.writeln(response?.headers.headerLines());
+  sb.writeln(response?.bodyAsString);
+  return sb.toString();
+}
+
+RelativeRect menuPosition(BuildContext context) {
+  final RenderBox bar = context.findRenderObject() as RenderBox;
+  final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  const Offset offset = Offset.zero;
+  final RelativeRect position = RelativeRect.fromRect(
+    Rect.fromPoints(
+      bar.localToGlobal(bar.size.centerRight(offset), ancestor: overlay),
+      bar.localToGlobal(bar.size.centerRight(offset), ancestor: overlay),
+    ),
+    offset & overlay.size,
+  );
+  return position;
+}
+
+Widget contextMenu(BuildContext context, EditableTextState editableTextState,
+    {ContextMenuButtonItem? customItem, bool copyValue = true}) {
+  List<ContextMenuButtonItem> list = [
+    ContextMenuButtonItem(
+      onPressed: () {
+        editableTextState.copySelection(SelectionChangedCause.tap);
+
+        FlutterToastr.show(AppLocalizations.of(context)!.copied, context);
+        unSelect(editableTextState);
+
+        editableTextState.hideToolbar();
+      },
+      type: ContextMenuButtonType.copy,
+    ),
+    // “复制值”在 header 等场景有用；body 整个文本即全部内容，用全选即可，故可关闭
+    if (copyValue)
+      ContextMenuButtonItem(
+        label: Localizations.localeOf(context) == const Locale.fromSubtags(languageCode: 'zh') ? '复制值' : 'Copy Value',
+        onPressed: () {
+          unSelect(editableTextState);
+          Clipboard.setData(ClipboardData(text: editableTextState.textEditingValue.text)).then((value) {
+            if (context.mounted) FlutterToastr.show(AppLocalizations.of(context)!.copied, context);
+            editableTextState.hideToolbar();
+          });
+        },
+        type: ContextMenuButtonType.custom,
+      ),
+    ContextMenuButtonItem(
+      onPressed: () {
+        editableTextState.selectAll(SelectionChangedCause.tap);
+      },
+      type: ContextMenuButtonType.selectAll,
+    ),
+  ];
+
+  //选中的文本，未选中时回退为整个值
+  final value = editableTextState.textEditingValue;
+  var payload = value.selection.textInside(value.text).trim();
+  if (payload.isEmpty) payload = value.text;
+
+  list.addAll(sendToToolItems(context, payload, () => editableTextState.hideToolbar()));
+
+  if (customItem != null) {
+    list.add(customItem);
+  }
+
+  if (Platform.isIOS) {
+    list.add(ContextMenuButtonItem(
+      onPressed: () async {
+        editableTextState.shareSelection(SelectionChangedCause.toolbar);
+      },
+      type: ContextMenuButtonType.share,
+    ));
+  }
+
+  return AdaptiveTextSelectionToolbar.buttonItems(
+    anchors: editableTextState.contextMenuAnchors,
+    buttonItems: list,
+  );
+}
+
+/// “发送到解码器 / AES 解密” 菜单项，[payload] 为空时返回空列表
+List<ContextMenuButtonItem> sendToToolItems(BuildContext context, String payload, VoidCallback onDone) {
+  if (payload.isEmpty) return const [];
+
+  final bool isZh = Localizations.localeOf(context) == const Locale.fromSubtags(languageCode: 'zh');
+  return [
+    ContextMenuButtonItem(
+      label: isZh ? '发送到解码器' : 'Send to Decoder',
+      onPressed: () {
+        encodeWindow(EncoderType.base64, context, payload);
+        onDone();
+      },
+      type: ContextMenuButtonType.custom,
+    ),
+    ContextMenuButtonItem(
+      label: isZh ? '发送到 AES 解密' : 'Send to AES Decrypt',
+      onPressed: () {
+        openAesWindow(context, payload);
+        onDone();
+      },
+      type: ContextMenuButtonType.custom,
+    ),
+  ];
+}
+
+/// SelectionArea（SelectableRegionState）的右键菜单，用于 body 的虚拟化 / 超大文本等区域选择场景。
+/// [selected] 由调用方通过 SelectableRegion.onSelectionChanged 捕获。
+/// body 场景不提供“复制值”（复制全部用全选即可）。
+Widget selectableRegionContextMenu(BuildContext context, SelectableRegionState state, String selected) {
+  final payload = selected.trim();
+
+  //复用平台默认的 复制/全选/分享 项，再追加“发送到解码器/AES”
+  final list = <ContextMenuButtonItem>[
+    ...state.contextMenuButtonItems,
+    ...sendToToolItems(context, payload, () => state.hideToolbar()),
+  ];
+
+  return AdaptiveTextSelectionToolbar.buttonItems(anchors: state.contextMenuAnchors, buttonItems: list);
+}
+
+void unSelect(EditableTextState editableTextState) {
+  editableTextState.userUpdateTextEditingValue(
+    editableTextState.textEditingValue
+        .copyWith(selection: TextSelection.collapsed(offset: editableTextState.textEditingValue.selection.baseOffset)),
+    SelectionChangedCause.tap,
+  );
+}
+
+///Future — skips rebuild when the resolved value equals [initialData].
+Widget futureWidget<T>(Future<T> future, Widget Function(T data) toWidget, {T? initialData, bool loading = false}) {
+  return _FutureWidget<T>(
+    future: future,
+    toWidget: toWidget,
+    initialData: initialData,
+    loading: loading,
+  );
+}
+
+class _FutureWidget<T> extends StatefulWidget {
+  final Future<T> future;
+  final Widget Function(T data) toWidget;
+  final T? initialData;
+  final bool loading;
+
+  const _FutureWidget({
+    required this.future,
+    required this.toWidget,
+    this.initialData,
+    this.loading = false,
+  });
+
+  @override
+  State<_FutureWidget<T>> createState() => _FutureWidgetState<T>();
+}
+
+class _FutureWidgetState<T> extends State<_FutureWidget<T>> {
+  T? _data;
+
+  @override
+  void initState() {
+    super.initState();
+    _data = widget.initialData;
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FutureWidget<T> old) {
+    super.didUpdateWidget(old);
+    // Future 实例变化（如 body 子树重建）时，继续展示当前已有的内容直到新结果返回，
+    // 不重置回 initialData，避免界面出现“刷新/闪烁”。
+    if (old.future != widget.future) {
+      _subscribe();
+    }
+  }
+
+  void _subscribe() {
+    final captured = widget.future;
+    captured.then((result) {
+      if (!mounted || widget.future != captured) return;
+      // Result unchanged — no rebuild needed.
+      if (result == _data) return;
+      setState(() => _data = result);
+    }).catchError((error) {
+      if (mounted) logger.e(error);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_data != null) {
+      return widget.toWidget(_data as T);
+    }
+    return widget.loading ? const Center(child: CircularProgressIndicator()) : const SizedBox();
+  }
+}
+
+Future showContextMenu(BuildContext context, Offset offset, {required List<PopupMenuEntry> items}) {
+  return showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        offset.dx + 10,
+        offset.dy - 50,
+        offset.dx + 10,
+        offset.dy - 50,
+      ),
+      items: items);
+}
+
+Future<T?> showConfirmDialog<T>(BuildContext context, {String? title, String? content, VoidCallback? onConfirm}) {
+  title ??= AppLocalizations.of(context)!.confirmTitle;
+  content ??= AppLocalizations.of(context)!.confirmContent;
+  return showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(title!, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          content: Text(content!),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(AppLocalizations.of(context)!.cancel),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                if (onConfirm != null) onConfirm();
+              },
+              child: Text(AppLocalizations.of(context)!.confirm),
+            ),
+          ],
+        );
+      });
+}
+
+///滚动条
+ScrollController? trackingScroll(ScrollController? scrollController) {
+  if (scrollController == null) {
+    return null;
+  }
+
+  var trackingScroll = TrackingScrollController();
+  double offset = 0;
+  trackingScroll.addListener(() {
+    if (trackingScroll.offset < 30 && trackingScroll.offset < offset && scrollController.offset > 0) {
+      //往上滚动
+      scrollController.jumpTo(scrollController.offset - max(offset - trackingScroll.offset, 15));
+    } else if (trackingScroll.offset > 0 &&
+        trackingScroll.offset > offset &&
+        scrollController.offset < scrollController.position.maxScrollExtent) {
+      //往下滚动
+      scrollController.jumpTo(scrollController.offset + max(trackingScroll.offset - offset, 15));
+    }
+
+    offset = trackingScroll.offset;
+  });
+  return trackingScroll;
+}
