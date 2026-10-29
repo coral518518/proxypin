@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -36,8 +38,24 @@ jobs:
       - name: Build APK (Release)
         run: flutter build apk --release --android-skip-build-dependency-validation
 
-      - name: Upload APK
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: proxypin-release-apk
           path: build/app/outputs/flutter-apk/*.apk
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "ProxyPin 最新构建 (Android APK)"
+          body: |
+            ### ProxyPin 最新构建
+            - 修复 Android 13 上特定 App 抓包报 SSL Alert 46 / SSL handshake failed 问题
+            - 优化动态证书扩展字段（EKU / KeyUsage / BasicConstraints）与服务端证书探测
+            - 直接下载下方的 `.apk` 即可安装
+          draft: false
+          prerelease: false
+          files: build/app/outputs/flutter-apk/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
