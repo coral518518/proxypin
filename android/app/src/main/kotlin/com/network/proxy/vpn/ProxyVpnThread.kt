@@ -40,6 +40,7 @@ class ProxyVpnThread(
         args.append(" --tun-fd ").append(fd)
         args.append(" --proxy socks5://").append(proxyHost).append(":").append(proxyPort)
         args.append(" --dns virtual")
+        args.append(" --dns-addr 223.5.5.5")
         args.append(" --virtual-dns-pool ").append(VIRTUAL_DNS_POOL)
         args.append(" --ipv6-enabled")
         args.append(" --verbosity info")

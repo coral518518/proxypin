@@ -76,6 +76,15 @@ class HostAndPort {
     return ipV6RegExp.hasMatch(address);
   }
 
+  /// 是否为 tun2proxy / Clash 等 VPN 虚拟网卡分配的 Fake-IP (198.18.0.0/15 网段)
+  bool get isFakeIp => isFakeIpString(_host);
+
+  /// 判断指定 host 字符串是否为 Fake-IP
+  static bool isFakeIpString(String? host) {
+    if (host == null || host.isEmpty) return false;
+    return host.startsWith('198.18.') || host.startsWith('198.19.');
+  }
+
   HostAndPort(this.scheme, String host, this.port, {bool? ipv6})
       : _host = hostToAscii(host),
         _ipv6 = ipv6;

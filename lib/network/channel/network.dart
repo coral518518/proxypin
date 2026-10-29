@@ -192,7 +192,58 @@ class Server extends Network {
           SocksServerHandler(channel.dispatcher.decoder, channel.dispatcher.encoder, channel.dispatcher.handler));
     }
 
+    // 非 HTTP 且非 TLS 的纯 TCP 原始流量（如网易云信 IM、游戏私有二进制长连接协议、推送通道等）：
+    // 直接切换为双向透明转发 (RelayHandler)，避免送入 HttpRequestDecoder 导致解析失败断开核心连接
+    if (hostAndPort != null &&
+        channel.dispatcher.handler is! SocksServerHandler &&
+        !_isLikelyHttpRequest(data)) {
+      HostAndPort remoteAddress = hostAndPort;
+      final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
+      if (socksProxy != null && !HostAndPort.isFakeIpString(socksProxy.host)) {
+        remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
+      }
+      var remoteChannel = channelContext.serverChannel ??
+          await channelContext.connectServerChannel(remoteAddress, RelayHandler(channel));
+      relay(channel, remoteChannel);
+      channel.dispatcher.channelRead(channelContext, channel, data);
+      return;
+    }
+
     channel.dispatcher.channelRead(channelContext, channel, data);
+  }
+
+  /// 检查数据包首部是否可能为标准 HTTP 请求或 HTTP/2 前言
+  static bool _isLikelyHttpRequest(Uint8List data) {
+    if (data.length < 3) return false;
+    // PRI * HTTP/2.0 (h2c 连接前言)
+    if (data.length >= 3 && data[0] == 0x50 && data[1] == 0x52 && data[2] == 0x49) {
+      return true;
+    }
+    // 标准 HTTP 动词前缀: GET, POST, HEAD, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
+    const prefixes = [
+      [0x47, 0x45, 0x54, 0x20], // GET 
+      [0x50, 0x4F, 0x53, 0x54], // POST
+      [0x48, 0x45, 0x41, 0x44], // HEAD
+      [0x50, 0x55, 0x54, 0x20], // PUT 
+      [0x44, 0x45, 0x4C, 0x45], // DELE
+      [0x43, 0x4F, 0x4E, 0x4E], // CONN
+      [0x4F, 0x50, 0x54, 0x49], // OPTI
+      [0x54, 0x52, 0x41, 0x43], // TRAC
+      [0x50, 0x41, 0x54, 0x43], // PATC
+    ];
+    for (final prefix in prefixes) {
+      if (data.length >= prefix.length) {
+        bool match = true;
+        for (int i = 0; i < prefix.length; i++) {
+          if (data[i] != prefix[i]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) return true;
+      }
+    }
+    return false;
   }
 
   /// ssl握手
@@ -222,8 +273,16 @@ class Server extends Network {
         hostAndPort = HostAndPort.host(domain!, port, scheme: HostAndPort.httpsScheme);
       }
 
+      // 如果当前 hostAndPort 为 tun2proxy 分配的 Fake-IP (198.18.0.0/15)，
+      // 且从 TLS ClientHello SNI 中解析到了真实域名 serviceName，
+      // 必须将目标 host 纠正为真实域名，绝不能向 Fake-IP 发起上游连接（外部无法路由必报错断网）
+      if (hostAndPort.isFakeIp && serviceName != null && !HostAndPort.isFakeIpString(serviceName)) {
+        hostAndPort = hostAndPort.copyWith(host: serviceName);
+        channelContext.host = hostAndPort;
+      }
+
       hostAndPort.scheme = HostAndPort.httpsScheme;
-      channelContext.putAttribute(AttributeKeys.domain, hostAndPort.host);
+      channelContext.putAttribute(AttributeKeys.domain, serviceName ?? hostAndPort.host);
 
       remoteChannel = channelContext.serverChannel;
 
@@ -246,7 +305,7 @@ class Server extends Network {
           if (remote == null && proxyInfo == null) {
             HostAndPort remoteAddress = hostAndPort;
             final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
-            if (socksProxy != null) {
+            if (socksProxy != null && !HostAndPort.isFakeIpString(socksProxy.host)) {
               remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
             }
             final httpHandler = channel.dispatcher.handler;

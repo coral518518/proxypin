@@ -386,8 +386,9 @@ class ProxyVpnService : VpnService(), ProtectSocket {
             .setMtu(MAX_PACKET_LEN)
             .addAddress(VIRTUAL_HOST, 32)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer("198.18.0.1") // Virtual DNS
-            .addDnsServer("8.8.8.8")
+            .addDnsServer("198.18.0.1") // tun2proxy 虚拟 DNS (优先匹配)
+            .addDnsServer("223.5.5.5")   // 阿里公共 DNS (国内高速且无 GFW 阻断)
+            .addDnsServer("119.29.29.29") // 腾讯公共 DNS 兜底
             .setSession(baseContext.applicationInfo.name)
             .setBlocking(true)
 
@@ -395,7 +396,7 @@ class ProxyVpnService : VpnService(), ProtectSocket {
         try {
             build.addAddress("fd00::1", 128)
             build.addRoute("::", 0)
-            build.addDnsServer("2001:4860:4860::8888")
+            build.addDnsServer("2400:3200::1") // 阿里 IPv6 公共 DNS (替代被墙的 Google IPv6 DNS)
         } catch (e: Exception) {
             Log.w("ProxyVpnService", "Failed to add IPv6 routes", e)
         }
@@ -433,11 +434,10 @@ class ProxyVpnService : VpnService(), ProtectSocket {
                 setMetered(false)
             }
 
-            if (setSystemProxy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Log.d("ProxyVpnService", "set system proxy $proxyHost:$proxyPort")
-                val buildProxy = ProxyInfo.buildDirectProxy(proxyHost, proxyPort)
-                setHttpProxy(buildProxy)
-            }
+            // 注意：在 TUN 虚拟网卡全流量接管模式 (addRoute 0.0.0.0/0) 下，所有 IP 报文均由内核直接路由至 TUN 虚拟设备并由 tun2proxy 捕获。
+            // 绝不能在本地捕获模式下强加 setHttpProxy！因为 setHttpProxy 会在 Android 系统中广播 http.proxyHost 和 getDefaultProxy()，
+            // 会直接触发网易大神、游戏及银行类 App 的反代理/反抓包检测机制，导致 App 判定存在网络风险直接弹窗“无网络连接/断网”！
+            // Reqable 等专业工具在 Android VPN 增强模式下也完全不调用 setHttpProxy。
         }.establish()
     }
 

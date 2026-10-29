@@ -248,7 +248,7 @@ class X509Utils {
             //若按 dNSName 编码, OkHttp/Android 等严格 HostnameVerifier 会校验失败
             sanList.add(ASN1Object(tag: 0x87)..valueBytes = ipBytes);
           } else {
-            sanList.add(ASN1PrintableString(stringValue: s, tag: 0x82));
+            sanList.add(ASN1IA5String(stringValue: s, tag: 0x82));
           }
         }
         var octetString = ASN1OctetString(octets: sanList.encode());

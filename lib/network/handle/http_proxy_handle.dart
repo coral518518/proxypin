@@ -217,6 +217,18 @@ class HttpProxyChannelHandler extends ChannelHandler<HttpRequest> {
     }
 
     var hostAndPort = httpRequest.hostAndPort ?? getHostAndPort(httpRequest);
+    // 如果 host 是 Fake-IP (198.18.0.0/15)，优先从 SNI 域名属性或 HTTP Host 头部纠正为真实域名
+    if (hostAndPort.isFakeIp) {
+      final domain = channelContext.getAttribute<String>(AttributeKeys.domain);
+      final hostHeader = httpRequest.headers.host?.split(':').first;
+      final realHost = (domain != null && !HostAndPort.isFakeIpString(domain))
+          ? domain
+          : ((hostHeader != null && !HostAndPort.isFakeIpString(hostHeader)) ? hostHeader : null);
+      if (realHost != null) {
+        hostAndPort = hostAndPort.copyWith(host: realHost);
+        httpRequest.hostAndPort = hostAndPort;
+      }
+    }
     channelContext.host = hostAndPort;
 
     //远程转发
@@ -254,7 +266,7 @@ class HttpProxyChannelHandler extends ChannelHandler<HttpRequest> {
     HostAndPort remoteAddress = hostAndPort;
 
     final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
-    if (socksProxy != null) {
+    if (socksProxy != null && !HostAndPort.isFakeIpString(socksProxy.host)) {
       remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
     }
 
