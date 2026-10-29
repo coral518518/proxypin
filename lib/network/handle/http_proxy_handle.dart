@@ -40,6 +40,15 @@ class HttpProxyChannelHandler extends ChannelHandler<HttpRequest> {
       return;
     }
 
+    // Android/系统 Captive Portal 连通性探测快速响应 204，防止系统误判无网络连接
+    if (msg.uri.endsWith('/generate_204') || msg.uri.endsWith('/gen_204')) {
+      await channel.writeAndClose(
+          channelContext,
+          HttpResponse(HttpStatus.noContent, protocolVersion: msg.protocolVersion)
+            ..headers.set(HttpHeaders.CONTENT_LENGTH, '0'));
+      return;
+    }
+
     //代理转发请求
     try {
       await forward(channelContext, channel, msg).catchError((error, trace) {

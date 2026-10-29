@@ -35,6 +35,8 @@ import 'package:proxypin/network/util/process_info.dart';
 import 'package:proxypin/network/util/tls.dart';
 
 import '../bin/listener.dart';
+import '../components/interceptor.dart';
+import '../handle/http_proxy_handle.dart';
 import 'host_port.dart';
 
 abstract class Network {
@@ -230,6 +232,41 @@ class Server extends Network {
         relay(channel, remoteChannel);
         channel.dispatcher.channelRead(channelContext, channel, data);
         return;
+      }
+
+      // SOCKS5/VPN 等透明捕获模式下，serverChannel 尚未预建连接；
+      // 在完成客户端 TLS 握手前先预连上游，确保：
+      // 1. 获取真实上游证书的 SAN / Subject / 有效期，镜像生成叶子证书通过客户端严格校验；
+      // 2. 锁定真实上游协商的 ALPN (h2 / http/1.1)，与客户端协议绝对对齐，消除转换风险；
+      // 3. 上游不可达时尽早阻断，避免客户端建立“假活”TLS连接后挂起。
+      if (remoteChannel == null) {
+        try {
+          HostAndPort? remote = channelContext.getAttribute(AttributeKeys.remote);
+          ProxyInfo? proxyInfo = channelContext.getAttribute(AttributeKeys.proxyInfo);
+          if (remote == null && proxyInfo == null) {
+            HostAndPort remoteAddress = hostAndPort;
+            final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
+            if (socksProxy != null) {
+              remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
+            }
+            final httpHandler = channel.dispatcher.handler;
+            List<Interceptor> interceptors = [];
+            if (httpHandler is HttpProxyChannelHandler) {
+              interceptors = httpHandler.interceptors;
+              for (var interceptor in interceptors) {
+                remoteAddress = await interceptor.preConnect(remoteAddress);
+              }
+            }
+
+            final ChannelHandler proxyHandler = (httpHandler is HttpProxyChannelHandler)
+                ? HttpResponseProxyHandler(channel, interceptors, listener: listener)
+                : RelayHandler(channel);
+
+            remoteChannel = await channelContext.connectServerChannel(remoteAddress, proxyHandler);
+          }
+        } catch (e) {
+          logger.w('[${channelContext.clientChannel?.id}] Pre-connect upstream $hostAndPort failed: $e, fallback to lazy connect');
+        }
       }
 
       if (remoteChannel != null && !remoteChannel.isSsl) {

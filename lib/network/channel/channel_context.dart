@@ -105,6 +105,9 @@ class ChannelContext {
   Future<Channel?> get readyServerChannel async {
     final connecting = _connectingServerChannel;
     if (connecting != null) return await connecting;
+    if (serverChannel != null && !serverChannel!.isOpen) {
+      serverChannel = null;
+    }
     return serverChannel;
   }
 
@@ -138,7 +141,8 @@ class ChannelContext {
     final connecting = _connectingServerChannel;
     if (connecting != null) return connecting;
     final connected = serverChannel;
-    if (connected != null) return Future.value(connected);
+    if (connected != null && connected.isOpen) return Future.value(connected);
+    if (connected != null && !connected.isOpen) serverChannel = null;
     return _connectingServerChannel ??= _connectServerChannel(hostAndPort, channelHandler);
   }
 
