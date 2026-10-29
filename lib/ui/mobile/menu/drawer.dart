@@ -25,6 +25,8 @@ import 'package:proxypin/network/components/manager/request_breakpoint_manager.d
 import 'package:proxypin/network/components/manager/request_rewrite_manager.dart';
 import 'package:proxypin/network/http/http.dart';
 import 'package:proxypin/network/util/system_proxy.dart';
+import 'package:proxypin/native/vpn.dart';
+import 'package:proxypin/utils/ip.dart';
 import 'package:proxypin/storage/histories.dart';
 import 'package:proxypin/ui/mobile/menu/weak_network_tile.dart';
 import 'package:proxypin/ui/mobile/setting/hosts.dart';
@@ -263,9 +265,13 @@ class _SettingPage extends StatelessWidget {
                       trailing: SwitchWidget(
                           value: configuration.enableSystemProxy,
                           scale: 0.8,
-                          onChanged: (value) {
+                          onChanged: (value) async {
                             configuration.enableSystemProxy = value;
                             proxyServer.configuration.flushConfig();
+                            if (Vpn.isVpnStarted) {
+                              String host = await localIp(readCache: false);
+                              Vpn.restartVpn(host, proxyServer.port, configuration);
+                            }
                           })),
                 if (Platform.isAndroid)
                   Divider(height: 0, thickness: 0.3, color: Theme.of(context).dividerColor.withValues(alpha: 0.22)),

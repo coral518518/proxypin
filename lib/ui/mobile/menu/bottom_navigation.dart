@@ -21,6 +21,8 @@ import 'package:flutter/material.dart';
 import 'package:proxypin/l10n/app_localizations.dart';
 import 'package:proxypin/mcp/mcp_service.dart';
 import 'package:proxypin/network/bin/server.dart';
+import 'package:proxypin/native/vpn.dart';
+import 'package:proxypin/utils/ip.dart';
 import 'package:proxypin/network/components/manager/environment_manager.dart';
 import 'package:proxypin/network/components/manager/hosts_manager.dart';
 import 'package:proxypin/network/components/manager/request_block_manager.dart';
@@ -407,9 +409,13 @@ class _SettingPageState extends State<SettingPage> {
                   trailing: SwitchWidget(
                       value: configuration.enableSystemProxy,
                       scale: 0.8,
-                      onChanged: (value) {
+                      onChanged: (value) async {
                         configuration.enableSystemProxy = value;
                         proxyServer.configuration.flushConfig();
+                        if (Vpn.isVpnStarted) {
+                          String host = await localIp(readCache: false);
+                          Vpn.restartVpn(host, proxyServer.port, configuration);
+                        }
                       })),
             if (Platform.isAndroid) menuDivider(context),
             ListTile(

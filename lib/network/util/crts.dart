@@ -210,7 +210,7 @@ class CertificateManager {
         notBefore: effectiveNotBefore,
         notAfter: effectiveNotAfter,
         extKeyUsage: [ExtendedKeyUsage.SERVER_AUTH],
-        basicConstraints: BasicConstraints(isCA: false, critical: false));
+        basicConstraints: null);
   }
 
   /// 提取远程证书的 subject (key 为 OID 字符串, 如 2.5.4.3=CN), 整体替换默认模板避免 CN 重复; 为空返回 null
