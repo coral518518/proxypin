@@ -174,10 +174,23 @@ class ProxyVpnService : VpnService(), ProtectSocket {
 
     private fun disconnect() {
         unregisterNetworkCallback()
-        vpnThread?.run { stopThread() }
-        vpnInterface?.close()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            vpnThread?.stopThread()
+        } catch (e: Exception) {
+            Log.w("ProxyVpnService", "Error stopping vpnThread", e)
+        }
+        vpnThread = null
+        try {
+            vpnInterface?.close()
+        } catch (e: Exception) {
+            Log.w("ProxyVpnService", "Error closing vpnInterface", e)
+        }
         vpnInterface = null
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w("ProxyVpnService", "Error stopping foreground", e)
+        }
         isRunning = false
     }
 
@@ -434,10 +447,11 @@ class ProxyVpnService : VpnService(), ProtectSocket {
                 setMetered(false)
             }
 
-            // 注意：在 TUN 虚拟网卡全流量接管模式 (addRoute 0.0.0.0/0) 下，所有 IP 报文均由内核直接路由至 TUN 虚拟设备并由 tun2proxy 捕获。
-            // 绝不能在本地捕获模式下强加 setHttpProxy！因为 setHttpProxy 会在 Android 系统中广播 http.proxyHost 和 getDefaultProxy()，
-            // 会直接触发网易大神、游戏及银行类 App 的反代理/反抓包检测机制，导致 App 判定存在网络风险直接弹窗“无网络连接/断网”！
-            // Reqable 等专业工具在 Android VPN 增强模式下也完全不调用 setHttpProxy。
+            if (setSystemProxy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Log.d("ProxyVpnService", "set system proxy $proxyHost:$proxyPort")
+                val buildProxy = ProxyInfo.buildDirectProxy(proxyHost, proxyPort)
+                setHttpProxy(buildProxy)
+            }
         }.establish()
     }
 

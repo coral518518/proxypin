@@ -192,58 +192,7 @@ class Server extends Network {
           SocksServerHandler(channel.dispatcher.decoder, channel.dispatcher.encoder, channel.dispatcher.handler));
     }
 
-    // 非 HTTP 且非 TLS 的纯 TCP 原始流量（如网易云信 IM、游戏私有二进制长连接协议、推送通道等）：
-    // 直接切换为双向透明转发 (RelayHandler)，避免送入 HttpRequestDecoder 导致解析失败断开核心连接
-    if (hostAndPort != null &&
-        channel.dispatcher.handler is! SocksServerHandler &&
-        !_isLikelyHttpRequest(data)) {
-      HostAndPort remoteAddress = hostAndPort;
-      final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
-      if (socksProxy != null && !HostAndPort.isFakeIpString(socksProxy.host)) {
-        remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
-      }
-      var remoteChannel = channelContext.serverChannel ??
-          await channelContext.connectServerChannel(remoteAddress, RelayHandler(channel));
-      relay(channel, remoteChannel);
-      channel.dispatcher.channelRead(channelContext, channel, data);
-      return;
-    }
-
     channel.dispatcher.channelRead(channelContext, channel, data);
-  }
-
-  /// 检查数据包首部是否可能为标准 HTTP 请求或 HTTP/2 前言
-  static bool _isLikelyHttpRequest(Uint8List data) {
-    if (data.length < 3) return false;
-    // PRI * HTTP/2.0 (h2c 连接前言)
-    if (data.length >= 3 && data[0] == 0x50 && data[1] == 0x52 && data[2] == 0x49) {
-      return true;
-    }
-    // 标准 HTTP 动词前缀: GET, POST, HEAD, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
-    const prefixes = [
-      [0x47, 0x45, 0x54, 0x20], // GET 
-      [0x50, 0x4F, 0x53, 0x54], // POST
-      [0x48, 0x45, 0x41, 0x44], // HEAD
-      [0x50, 0x55, 0x54, 0x20], // PUT 
-      [0x44, 0x45, 0x4C, 0x45], // DELE
-      [0x43, 0x4F, 0x4E, 0x4E], // CONN
-      [0x4F, 0x50, 0x54, 0x49], // OPTI
-      [0x54, 0x52, 0x41, 0x43], // TRAC
-      [0x50, 0x41, 0x54, 0x43], // PATC
-    ];
-    for (final prefix in prefixes) {
-      if (data.length >= prefix.length) {
-        bool match = true;
-        for (int i = 0; i < prefix.length; i++) {
-          if (data[i] != prefix[i]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) return true;
-      }
-    }
-    return false;
   }
 
   /// ssl握手
@@ -275,7 +224,7 @@ class Server extends Network {
 
       // 如果当前 hostAndPort 为 tun2proxy 分配的 Fake-IP (198.18.0.0/15)，
       // 且从 TLS ClientHello SNI 中解析到了真实域名 serviceName，
-      // 必须将目标 host 纠正为真实域名，绝不能向 Fake-IP 发起上游连接（外部无法路由必报错断网）
+      // 必须将目标 host 纠正为真实域名，绝不能向 Fake-IP 发起上游连接
       if (hostAndPort.isFakeIp && serviceName != null && !HostAndPort.isFakeIpString(serviceName)) {
         hostAndPort = hostAndPort.copyWith(host: serviceName);
         channelContext.host = hostAndPort;
@@ -293,59 +242,6 @@ class Server extends Network {
         return;
       }
 
-      // SOCKS5/VPN 等透明捕获模式下，serverChannel 尚未预建连接；
-      // 在完成客户端 TLS 握手前先预连上游，确保：
-      // 1. 获取真实上游证书的 SAN / Subject / 有效期，镜像生成叶子证书通过客户端严格校验；
-      // 2. 锁定真实上游协商的 ALPN (h2 / http/1.1)，与客户端协议绝对对齐，消除转换风险；
-      // 3. 上游不可达时尽早阻断，避免客户端建立“假活”TLS连接后挂起。
-      if (remoteChannel == null) {
-        try {
-          HostAndPort? remote = channelContext.getAttribute(AttributeKeys.remote);
-          ProxyInfo? proxyInfo = channelContext.getAttribute(AttributeKeys.proxyInfo);
-          if (remote == null && proxyInfo == null) {
-            HostAndPort remoteAddress = hostAndPort;
-            final ProxyInfo? socksProxy = channelContext.getAttribute(AttributeKeys.socks5Proxy);
-            if (socksProxy != null && !HostAndPort.isFakeIpString(socksProxy.host)) {
-              remoteAddress = hostAndPort.copyWith(host: socksProxy.host, port: socksProxy.port!);
-            }
-            final httpHandler = channel.dispatcher.handler;
-            List<Interceptor> interceptors = [];
-            if (httpHandler is HttpProxyChannelHandler) {
-              interceptors = httpHandler.interceptors;
-              for (var interceptor in interceptors) {
-                remoteAddress = await interceptor.preConnect(remoteAddress);
-              }
-            }
-
-            final ChannelHandler proxyHandler;
-            if (httpHandler is HttpProxyChannelHandler) {
-              proxyHandler = HttpResponseProxyHandler(channel, interceptors, listener: listener);
-            } else {
-              proxyHandler = RelayHandler(channel);
-            }
-
-            remoteChannel = await channelContext.connectServerChannel(remoteAddress, proxyHandler);
-          }
-        } catch (e) {
-          logger.w('[${channelContext.clientChannel?.id}] Pre-connect upstream $hostAndPort failed: $e, fallback to lazy connect');
-        }
-      }
-
-      if (remoteChannel != null && !remoteChannel.isSsl) {
-        var supportProtocols = configuration.enabledHttp2 ? TLS.supportProtocols(data) : ['http/1.1'];
-        // 与转发路径一致：含 h2 时带上 http/1.1 兜底，让 h1-only 上游显式选择
-        if (supportProtocols?.contains('h2') == true && supportProtocols?.contains('http/1.1') == false) {
-          supportProtocols = [...supportProtocols!, 'http/1.1'];
-        }
-        if (supportProtocols?.isEmpty == true) supportProtocols = null;
-        await remoteChannel.startSecureSocket(channelContext, host: serviceName, supportedProtocols: supportProtocols);
-      }
-
-      // 握手前若上游真实证书已就绪，直接基于其属性预生成/刷新叶子证书，避免客户端首次握手因证书不匹配报错
-      if (remoteChannel?.peerCertificate != null && serviceName != null) {
-        await CertificateManager.generateByRemoteCert(serviceName, remoteChannel!.peerCertificate);
-      }
-
       //ssl自签证书
       var certificate = await CertificateManager.getCertificateContext(serviceName!);
       var selectedProtocol = remoteChannel?.selectedProtocol;
@@ -355,9 +251,6 @@ class Server extends Network {
       if (selectedProtocol != null) {
         supportedProtocols = [selectedProtocol];
       } else if (remoteChannel != null && remoteChannel.isSsl) {
-        // 上游已完成握手但未选择 ALPN（h1-only 服务器/中间盒）：
-        // 优先让客户端也走 HTTP/1.1，端到端协议一致，避免协议转换；
-        // 客户端只提供 h2 时原样提供，由 h2<->h1 转换层桥接。
         final nonH2 = offeredProtocols?.where((p) => p != 'h2' && p != 'h2-14').toList();
         supportedProtocols = (nonH2?.isNotEmpty == true) ? nonH2 : offeredProtocols;
       } else {
